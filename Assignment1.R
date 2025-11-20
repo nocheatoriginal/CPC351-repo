@@ -17,9 +17,9 @@ min_n <- min(enrollment_counts)
 courses_max <- names(enrollment_counts[enrollment_counts == max_n])
 courses_min <- names(enrollment_counts[enrollment_counts == min_n])
 
-cat("[1a] Courses with highest number of students:",
+cat("[1a] Course with highest number of students:",
     paste(courses_max, collapse = ", "), "with", max_n, "students\n")
-cat("[1a] Course(s) with lowest number of students :",
+cat("[1a] Course with lowest number of students :",
     paste(courses_min, collapse = ", "), "with", min_n, "students\n")
 
 all_students <- unlist(student_lists)
