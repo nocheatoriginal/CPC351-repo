@@ -74,7 +74,7 @@ The R script assumes that the working directory is set to the root of this proje
 You can do this by adding the following line at the top of the script, replacing the path with the actual path to this project on your local machine:
 
 ```R
-setwd("~/Desktop/CPC351")
+setwd("~/Desktop/CPC351-repo/Assignment1")
 ```
 
 ### 3. Execute the Script

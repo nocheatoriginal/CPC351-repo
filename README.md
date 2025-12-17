@@ -25,7 +25,7 @@ This assignment covers a range of data analysis tasks, including student enrollm
 
 ### [Assignment 2](./Assignment2/)
 
-This assignment continues to build on the skills from the first, tackling similar data analysis and algorithmic challenges.
+This assignment focuses on data exploration and visualization using R. It involves a series of tasks designed to build skills in data manipulation, visualization, and analysis.
 
 -   **Source Code:** `Assignment2/Assignment2.R`
 -   **Details:** `Assignment2/README.md`
