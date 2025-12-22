@@ -132,3 +132,99 @@ ggplot(food_nutrition_df, aes(x = protein, y = calories, color = category)) +
   ) +
   theme_minimal() +
   theme(legend.position = "right")
+
+library(ggplot2)
+
+library(dplyr)
+
+# Q11:  Identify foods with extremely high fat content (above 95th percentile) and visualize them. 
+# Step 1: Compute the 95th percentile of fat content.
+fat_p95 <- quantile(food_nutrition_df$fat, probs = 0.95, na.rm = TRUE)
+
+# Step 2: Filter foods whose fat content exceeds the 95th percentile.
+
+high_fat <- food_nutrition_df %>%
+  filter(!is.na(fat), fat > fat_p95)
+
+# Step 3: Visualize the high-fat foods using a horizontal bar chart.
+ggplot(high_fat, aes(x = reorder(food_name, fat), y = fat)) +
+  geom_col(fill = "firebrick") +
+  coord_flip() +
+  labs(
+    title = "Foods with Extremely High Fat Content (>95th Percentile)",
+    subtitle = paste("95th percentile fat threshold =", round(fat_p95, 2)),
+    x = "Food",
+    y = "Fat Content (g)"
+  ) +
+  theme_minimal()
+
+# Q12: Compare the distribution of carbs across three selected categories using a violin plot. 
+# Step 1: Select three representative food categories.
+top3_categories <- food_nutrition_df %>%
+  count(category, sort = TRUE) %>%
+  slice_head(n = 3) %>%
+  pull(category)
+
+# Step 2: Subset the data for the selected categories and remove missing values.
+df_3cats <- food_nutrition_df %>%
+  filter(category %in% top3_categories, !is.na(carbs))
+
+# Step 3: Use a violin plot to visualize the distribution of carbohydrates.
+ggplot(df_3cats, aes(x = category, y = carbs, fill = category)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.15, fill = "white") +
+  labs(
+    title = "Distribution of Carbohydrates Across Selected Categories",
+    x = "Category",
+    y = "Carbohydrates (g)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Q13: Create a stacked bar chart showing total calories contributed by each category. 
+# Step 1: Aggregate total calories for each food category.
+calories_by_category <- food_nutrition_df %>%
+  group_by(category) %>%
+  summarise(total_calories = sum(calories, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Visualize the contribution of each category using a stacked bar chart.
+ggplot(calories_by_category, aes(x = "All Foods", y = total_calories, fill = category)) +
+  geom_col() +
+  labs(
+    title = "Total Calories Contributed by Each Category",
+    x = NULL,
+    y = "Total Calories"
+  ) +
+  theme_minimal()
+
+# Q14: Plot a density curve for protein content across all foods. 
+# Step 1: Remove missing values in protein to ensure a valid density estimate.
+df_protein <- food_nutrition_df %>% filter(!is.na(protein))
+
+# Step 2: Plot a density curve to visualize the overall distribution of protein.
+ggplot(df_protein, aes(x = protein)) +
+  geom_density(fill = "skyblue", alpha = 0.6) +
+  labs(
+    title = "Density Curve of Protein Content Across All Foods",
+    x = "Protein Content (g)",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+# Q15: Create a bubble chart where bubble size represents iron content, and axes are calories vs carbs.
+# Step 1: Prepare a clean dataset 
+df_bubble <- food_nutrition_df %>%
+  filter(!is.na(calories), !is.na(carbs), !is.na(iron))
+
+# Step 2: Create a bubble chart using a scatter plot.
+ggplot(df_bubble, aes(x = carbs, y = calories, size = iron)) +
+  geom_point(alpha = 0.7, color = "steelblue") +
+  labs(
+    title = "Bubble Chart of Calories vs Carbohydrates",
+    subtitle = "Bubble size represents iron content",
+    x = "Carbohydrates (g)",
+    y = "Calories",
+    size = "Iron Content"
+  ) +
+  theme_minimal()
+
