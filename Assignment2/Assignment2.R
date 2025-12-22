@@ -228,3 +228,153 @@ ggplot(df_bubble, aes(x = carbs, y = calories, size = iron)) +
   ) +
   theme_minimal()
 
+# Q16
+library(tidyverse)
+# 1) Read data
+df <- read.csv("/Users/sherlock/Desktop/Y3S1/351/A2/Food_Nutrition_Dataset.csv")
+
+# 2) Calculate the calories (kcal) of the three macronutrients.
+df2 <- df %>%
+  mutate(
+    protein_kcal = protein * 4,
+    carbs_kcal   = carbs * 4,
+    fat_kcal     = fat * 9,
+    total_macro_kcal = protein_kcal + carbs_kcal + fat_kcal
+  )
+# =========================
+# Q16 Nutrient Ratio Analysis
+# a) protein-to-calorie ratio
+# b) top 10 foods
+# c) horizontal bar chart
+# =========================
+
+q16_top10 <- df2 %>%
+  mutate(protein_to_cal_ratio = protein / calories) %>%  # g per kcal
+  arrange(desc(protein_to_cal_ratio)) %>%
+  slice_head(n = 10) %>%
+  select(food_name, category, calories, protein, protein_to_cal_ratio)
+
+print(q16_top10)
+
+# Horizontal bar chart (Top 10)
+p16 <- q16_top10 %>%
+  # Before plotting, reorder the food_name factors by ratio.
+  mutate(food_name = reorder(food_name, protein_to_cal_ratio)) %>% 
+  
+  ggplot(aes(x = food_name, y = protein_to_cal_ratio)) +
+  
+  # 1. Use geom_col and fill the color according to the ratio, without displaying the legend.
+  geom_col(aes(fill = protein_to_cal_ratio), show.legend = FALSE, width = 0.7) +
+  
+  # 2. Add numerical labels
+  # label = round(...) This will round the value to 3 decimal places.
+  # hjust = -0.2 Position the label slightly to the right of the top of the pillar.
+  geom_text(aes(label = round(protein_to_cal_ratio, 3)), 
+            hjust = -0.2, 
+            size = 3.5, 
+            color = "#333333") + 
+  
+  # 3. Flip the coordinate axes
+  coord_flip() +
+  
+  # 4. Set a color gradient 
+  scale_fill_gradient(low = "#a6cee3", high = "#1f78b4") +
+  
+  # 5. Expand the Y-axis range to make room for the numerical labels on the right and prevent them from being cut off.
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.15))) +
+  
+  # 6. Set title and axis labels
+  labs(
+    title = "Top 10 Foods by Protein-to-Calorie Ratio",
+    subtitle = "Highest protein efficiency (g/kcal)",
+    x = NULL, 
+    y = "Protein-to-Calorie Ratio (g per kcal)"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold", size = 14),
+    axis.text.y = element_text(size = 10)
+  )
+print(p16)
+
+# Q17
+# 1. Calculate and organize the data
+q17_cat <- df2 %>%
+  group_by(category) %>%
+  summarise(
+    protein_kcal = sum(protein_kcal, na.rm = TRUE),
+    carbs_kcal   = sum(carbs_kcal,   na.rm = TRUE),
+    fat_kcal     = sum(fat_kcal,     na.rm = TRUE),
+    total_kcal_from_macros = protein_kcal + carbs_kcal + fat_kcal,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    protein_pct = protein_kcal / total_kcal_from_macros * 100,
+    carbs_pct   = carbs_kcal   / total_kcal_from_macros * 100,
+    fat_pct     = fat_kcal     / total_kcal_from_macros * 100
+  )
+
+# 2. Sort by category based on protein content
+q17_cat <- q17_cat %>%
+  mutate(category = reorder(category, protein_pct)) 
+
+# 3. Convert to long table
+q17_long <- q17_cat %>%
+  select(category, protein_pct, carbs_pct, fat_pct) %>%
+  pivot_longer(
+    cols = c(protein_pct, carbs_pct, fat_pct),
+    names_to = "macronutrient",
+    values_to = "percent"
+  ) %>%
+  mutate(
+    macronutrient = recode(macronutrient,
+                           protein_pct = "Protein",
+                           carbs_pct   = "Carbs",
+                           fat_pct     = "Fat"),
+    macronutrient = factor(macronutrient, levels = c("Fat", "Carbs", "Protein"))
+  )
+
+# 4. Stacked bar chart
+p17 <- q17_long %>%
+  ggplot(aes(x = category, y = percent, fill = macronutrient)) +
+  
+  # Bar chart
+  geom_col(width = 0.8, alpha = 0.9) + 
+  
+  # Add percentage value labels
+  geom_text(aes(label = ifelse(percent > 3, paste0(round(percent, 0), "%"), "")), 
+            position = position_stack(vjust = 0.5), 
+            color = "white", 
+            size = 3,
+            fontface = "bold") +
+  
+  # Flip the axes
+  coord_flip() +
+  
+  scale_fill_manual(values = c(
+    "Protein" = "#FF6B6B",  
+    "Carbs"   = "#FFD93D",  
+    "Fat"     = "#4D96FF"   
+  )) +
+  
+  # Axis and title settings
+  scale_y_continuous(labels = function(x) paste0(x, "%"), expand = c(0,0)) + 
+  labs(
+    title = "Macronutrient Composition by Category",
+    subtitle = "Categories ordered by Protein contribution",
+    x = NULL, 
+    y = "Percentage of Total Calories",
+    fill = "Macro"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    legend.position = "top",          
+    panel.grid.major.y = element_blank(), 
+    panel.grid.minor = element_blank(),   
+    axis.text.y = element_text(size = 10, color = "black"), 
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+print(p17)
