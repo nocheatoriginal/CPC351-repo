@@ -1,64 +1,8 @@
 setwd("~/Desktop/HHN/Sem-6/courses/CPC351/CPC351-repo/GroupProject") # Set working directory!!
 
-#
-# Imports:
-#
-library(readxl)
-
-data_dir <- "Data"
-
-safe_name <- function(x) {
-  x <- gsub("\\.[^.]+$", "", basename(x))
-  x <- gsub("[^A-Za-z0-9_]+", "_", x)
-  x <- gsub("^_+|_+$", "", x)
-  if (nchar(x) == 0) x <- "dataset"
-  x
-}
-
-repository <- list()
-
-csv_files <- list.files(data_dir, pattern = "\\.csv$", full.names = TRUE, ignore.case = TRUE)
-
-for (f in csv_files) {
-  nm <- safe_name(f)
-  repository[[nm]] <- read.csv(f, stringsAsFactors = FALSE, check.names = FALSE)
-}
-
-xlsx_files <- list.files(data_dir, pattern = "\\.xlsx$", full.names = TRUE, ignore.case = TRUE)
-
-for (f in xlsx_files) {
-  base_nm <- safe_name(f)
-  sheets <- readxl::excel_sheets(f)
-  
-  if (length(sheets) == 1) {
-    repository[[base_nm]] <- readxl::read_excel(f, sheet = sheets[1])
-  } else {
-    for (sh in sheets) {
-      sh_nm <- gsub("[^A-Za-z0-9_]+", "_", sh)
-      sh_nm <- gsub("^_+|_+$", "", sh_nm)
-      nm <- paste0(base_nm, "__", sh_nm)
-      
-      repository[[nm]] <- readxl::read_excel(f, sheet = sh)
-    }
-  }
-}
-
-cat("Loaded datasets:\n")
-print(names(repository))
-
-inventory <- data.frame(
-  name = names(repository),
-  nrows = sapply(repository, nrow),
-  ncols = sapply(repository, ncol),
-  row.names = NULL
-)
-
-inventory[order(as.character(inventory[["name"]])), ]
-
-
 
 # ==============================================================================
-# CPC351 Project - Uber_Part 2: Regression Model (Fare Prediction)
+# CPC351 Project - Part 2
 # ==============================================================================
 
 # 1. Load Required Libraries
@@ -67,12 +11,294 @@ library(lubridate)
 library(ggplot2)
 library(randomForest)
 library(caret)
+library(ranger)
+library(cluster)
+
+set.seed(123)
+
+# ==============================================================================
+# 1) Load crab age prediction data
+# ==============================================================================
+df <- read.csv("Data/CrabAgePrediction.csv", stringsAsFactors = FALSE)
+names(df) <- make.names(names(df))  # ensures clean names like Shucked.Weight
+
+# Ensure correct types
+df$Sex <- factor(df$Sex)      # typically F, M, I
+df$Age <- as.numeric(df$Age)
+
+cat("Rows:", nrow(df), "Cols:", ncol(df), "\n")
+cat("Sex levels:", paste(levels(df$Sex), collapse = ", "), "\n")
+cat("Missing total:", sum(is.na(df)), "\n\n")
+
+# ==============================================================================
+# 2) Feature engineering
+# ==============================================================================
+df$BodyVolumeProxy <- df$Length * df$Diameter * df$Height
+
+safe_log <- function(x) log(pmax(x, 1e-9))
+df$LogWeight        <- safe_log(df$Weight)
+df$LogShuckedWeight <- safe_log(df$Shucked.Weight)
+df$LogVisceraWeight <- safe_log(df$Viscera.Weight)
+df$LogShellWeight   <- safe_log(df$Shell.Weight)
+
+# ==============================================================================
+# 3) Train/Test split (80/20)
+# ==============================================================================
+n <- nrow(df)
+test_idx <- sample(seq_len(n), size = round(0.2 * n))
+train <- df[-test_idx, ]
+test  <- df[test_idx, ]
+
+# Validation split inside training (for stacking weights)
+val_idx   <- sample(seq_len(nrow(train)), size = round(0.2 * nrow(train)))
+train_sub <- train[-val_idx, ]
+val_sub   <- train[val_idx, ]
+
+# ==============================================================================
+# 4) Metrics helpers
+# ==============================================================================
+rmse <- function(y, yhat) sqrt(mean((y - yhat)^2))
+mae  <- function(y, yhat) mean(abs(y - yhat))
+r2   <- function(y, yhat) 1 - sum((y - yhat)^2) / sum((y - mean(y))^2)
+
+report_metrics <- function(name, y, yhat) {
+  cat("\n===", name, "===\n")
+  cat("RMSE:", round(rmse(y, yhat), 3), "\n")
+  cat("MAE :", round(mae(y, yhat), 3), "\n")
+  cat("R^2 :", round(r2(y, yhat), 3), "\n")
+}
+
+# ==============================================================================
+# PART A) AGE PREDICTION (Combined / Ensemble)
+# ==============================================================================
+
+age_features <- c(
+  "Sex", "Length", "Diameter", "Height",
+  "Weight", "Shucked.Weight", "Viscera.Weight", "Shell.Weight",
+  "BodyVolumeProxy",
+  "LogWeight", "LogShuckedWeight", "LogVisceraWeight", "LogShellWeight"
+)
+
+age_formula <- as.formula(paste("Age ~", paste(age_features, collapse = " + ")))
+
+# A1) Linear model
+lm_age <- lm(age_formula, data = train_sub)
+val_pred_lm <- predict(lm_age, newdata = val_sub)
+
+# A2) Random Forest regression (fast)
+rf_age <- ranger(
+  formula = age_formula,
+  data = train_sub,
+  num.trees = 400,
+  mtry = max(2, floor(sqrt(length(age_features)))),
+  min.node.size = 5,
+  sample.fraction = 0.8,
+  importance = "permutation",
+  respect.unordered.factors = "order",
+  num.threads = max(1, parallel::detectCores() - 1),
+  seed = 123
+)
+val_pred_rf <- predict(rf_age, data = val_sub)$predictions
+
+# A3) Stacking model (learns best combination of LM + RF on validation)
+stack_df <- data.frame(Age = val_sub$Age, pred_lm = val_pred_lm, pred_rf = val_pred_rf)
+stack_model <- lm(Age ~ pred_lm + pred_rf, data = stack_df)
+
+cat("\nStacking coefficients (validation):\n")
+print(coef(stack_model))
+
+# Retrain base models on full training set
+lm_age_full <- lm(age_formula, data = train)
+rf_age_full <- ranger(
+  formula = age_formula,
+  data = train,
+  num.trees = 400,
+  mtry = max(2, floor(sqrt(length(age_features)))),
+  min.node.size = 5,
+  sample.fraction = 0.8,
+  importance = "permutation",
+  respect.unordered.factors = "order",
+  num.threads = max(1, parallel::detectCores() - 1),
+  seed = 123
+)
+
+# Predict on test
+test_pred_lm <- predict(lm_age_full, newdata = test)
+test_pred_rf <- predict(rf_age_full, data = test)$predictions
+
+b <- coef(stack_model)
+test_pred_ensemble <- b[1] + b["pred_lm"] * test_pred_lm + b["pred_rf"] * test_pred_rf
+
+# Metrics
+report_metrics("Age Model - Linear Regression (test)", test$Age, test_pred_lm)
+report_metrics("Age Model - Random Forest (test)", test$Age, test_pred_rf)
+report_metrics("Age Model - ENSEMBLE (stacked) (test)", test$Age, test_pred_ensemble)
+
+# Plot: Actual vs Predicted (Ensemble)
+plot(test$Age, test_pred_ensemble,
+     xlab = "Actual Age", ylab = "Predicted Age (Ensemble)",
+     main = "Ensemble Age Prediction: Actual vs Predicted (Test)",
+     pch = 19, col = rgb(0,0,0,0.25))
+abline(0, 1, col = "red", lwd = 2)
+
+# Feature importance for age (RF)
+age_imp <- sort(ranger::importance(rf_age_full), decreasing = TRUE)
+cat("\nTop 10 Age Feature Importances (RF):\n")
+print(round(age_imp[1:min(10, length(age_imp))], 4))
+
+barplot(age_imp[1:min(15, length(age_imp))],
+        las = 2, cex.names = 0.75,
+        main = "Age Prediction - RF Permutation Importance (Top 15)")
+
+# ==============================================================================
+# PART B) SEX PREDICTION (Classification)
+# ==============================================================================
+
+sex_features <- c(
+  "Length", "Diameter", "Height",
+  "Weight", "Shucked.Weight", "Viscera.Weight", "Shell.Weight",
+  "BodyVolumeProxy",
+  "LogWeight", "LogShuckedWeight", "LogVisceraWeight", "LogShellWeight"
+)
+
+sex_formula <- as.formula(paste("Sex ~", paste(sex_features, collapse = " + ")))
+
+sex_model <- ranger(
+  formula = sex_formula,
+  data = train,
+  num.trees = 500,
+  mtry = max(2, floor(sqrt(length(sex_features)))),
+  min.node.size = 5,
+  sample.fraction = 0.8,
+  probability = TRUE,
+  importance = "permutation",
+  respect.unordered.factors = "order",
+  num.threads = max(1, parallel::detectCores() - 1),
+  seed = 123
+)
+
+sex_prob <- predict(sex_model, data = test)$predictions
+sex_pred <- colnames(sex_prob)[max.col(sex_prob, ties.method = "first")]
+sex_pred <- factor(sex_pred, levels = levels(test$Sex))
+
+cat("\n=== Sex Prediction (Multiclass) ===\n")
+cat("Accuracy:", round(mean(sex_pred == test$Sex), 3), "\n")
+cat("Confusion Matrix:\n")
+print(table(Predicted = sex_pred, Actual = test$Sex))
+
+sex_imp <- sort(ranger::importance(sex_model), decreasing = TRUE)
+cat("\nTop 10 Sex Feature Importances:\n")
+print(round(sex_imp[1:min(10, length(sex_imp))], 4))
+
+barplot(sex_imp[1:min(15, length(sex_imp))],
+        las = 2, cex.names = 0.75,
+        main = "Sex Prediction - RF Permutation Importance (Top 15)")
+
+# ==============================================================================
+# PART C) CLUSTERING (K-means + Silhouette + PCA plot)
+# ==============================================================================
+
+cluster_features <- c("Length","Diameter","Height","Weight","Shucked.Weight","Viscera.Weight","Shell.Weight")
+X <- df[, cluster_features]
+X_scaled <- scale(X)
+
+# C1) Choose k using silhouette (k=2..8)
+k_values <- 2:8
+sil_scores <- numeric(length(k_values))
+wss <- numeric(length(k_values))
+
+for (i in seq_along(k_values)) {
+  k <- k_values[i]
+  km <- kmeans(X_scaled, centers = k, nstart = 10, iter.max = 50)
+  wss[i] <- km$tot.withinss
+  sil <- silhouette(km$cluster, dist(X_scaled))
+  sil_scores[i] <- mean(sil[, 3])
+}
+
+best_k <- k_values[which.max(sil_scores)]
+cat("\n=== Clustering ===\n")
+cat("Best k by silhouette:", best_k, "\n")
+
+# Elbow plot
+plot(k_values, wss, type = "b",
+     xlab = "k", ylab = "Total Within-Cluster SS",
+     main = "Elbow Method (K-means)")
+
+# Silhouette plot
+plot(k_values, sil_scores, type = "b",
+     xlab = "k", ylab = "Average Silhouette",
+     main = "Silhouette Scores (K-means)")
+
+# C2) Fit final k-means
+set.seed(123)
+km_final <- kmeans(X_scaled, centers = best_k, nstart = 25, iter.max = 100)
+df$Cluster <- factor(km_final$cluster)
+
+# C3) PCA for visualization
+pca <- prcomp(X_scaled, center = TRUE, scale. = FALSE)
+pc <- pca$x[, 1:2]
+
+# OPTIONAL: show top contributors to PC1/PC2 (so you can justify labeling)
+loadings <- pca$rotation[, 1:2]
+pc1_top <- sort(abs(loadings[,1]), decreasing = TRUE)
+pc2_top <- sort(abs(loadings[,2]), decreasing = TRUE)
+cat("\nTop contributors to PC1:\n")
+print(round(pc1_top[1:3], 3))
+cat("\nTop contributors to PC2:\n")
+print(round(pc2_top[1:3], 3))
+
+# C4) Rename cluster labels to something meaningful
+#     We label clusters based on mean Weight (size/mass)
+cluster_summary <- aggregate(
+  df[, c("Weight", "Length", "Diameter", "Height", "Age")],
+  list(Cluster = df$Cluster),
+  mean
+)
+
+cat("\nCluster summary (means):\n")
+print(cluster_summary)
+
+small_cluster <- as.character(cluster_summary$Cluster[which.min(cluster_summary$Weight)])
+large_cluster <- as.character(cluster_summary$Cluster[which.max(cluster_summary$Weight)])
+
+df$ClusterLabel <- as.character(df$Cluster)
+df$ClusterLabel[df$ClusterLabel == small_cluster] <- "Smaller / Lighter"
+df$ClusterLabel[df$ClusterLabel == large_cluster] <- "Larger / Heavier"
+df$ClusterLabel <- factor(df$ClusterLabel, levels = c("Smaller / Lighter", "Larger / Heavier"))
+
+cat("\nSex distribution by cluster label:\n")
+print(prop.table(table(df$ClusterLabel, df$Sex), margin = 1))
+
+cat("\nMean Age by cluster label:\n")
+print(aggregate(df$Age, list(Cluster = df$ClusterLabel), mean))
+
+# C5) Plot PCA with meaningful labels + centers
+plot(pc[,1], pc[,2],
+     col = as.numeric(df$ClusterLabel),
+     pch = 19,
+     xlab = "PC1 (Overall size / mass)",
+     ylab = "PC2 (Secondary shape variation)",
+     main = paste("K-means Clusters (k =", best_k, ") in PCA space"),
+     cex = 0.7)
+
+# centers on PCA space
+centers_pc <- aggregate(pc, list(Cluster = df$ClusterLabel), mean)
+points(centers_pc$PC1, centers_pc$PC2, pch = 4, cex = 2.2, lwd = 3)
+
+legend("topright",
+       legend = levels(df$ClusterLabel),
+       col = 1:length(levels(df$ClusterLabel)),
+       pch = 19,
+       title = "Cluster Type",
+       cex = 0.9)
+
+
 
 # ==============================================================================
 # 2. Data Loading & Cleaning
 # ==============================================================================
 # Read data
-df <- read.csv("uber.csv")
+df <- read.csv("Data/uber.csv")
 
 # Check original dimensions
 print(paste("Original rows:", nrow(df)))
@@ -247,13 +473,11 @@ p3 <- ggplot(importance_df, aes(x = reorder(Feature, `%IncMSE`), y = `%IncMSE`))
 ggsave("Feature_Importance.png", plot = p3)
 print(p3)
 
-print("Regression Analusis Completed!")
-
-
+print("Regression Analysis Completed!")
 
 
 # ==============================================================================
-# CPC351 Project - Uber_Part 2: Clustering Model (Hotspot Detection)
+# Uber dataset clustering model
 # ==============================================================================
 
 # 1. Load Required Libraries
@@ -269,7 +493,7 @@ library(cluster)
 # 2. Data Loading & Cleaning
 # ==============================================================================
 # Read data
-df <- read.csv("uber.csv")
+df <- read.csv("Data/uber.csv")
 
 # Basic cleaning
 df <- na.omit(df)
